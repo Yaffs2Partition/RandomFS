@@ -4,14 +4,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Simple XOR hash for demo purposes
-static inline uint32_t rfs_hash(const uint8_t *data, size_t len) {
-    uint32_t h = 0;
+static inline uint64_t rfs_hash64(const void *data, size_t len) {
+    const uint8_t *p = data;
+    uint64_t h = 1469598103934665603ULL;
     for (size_t i = 0; i < len; i++) {
-        h ^= ((uint32_t)data[i]) << (i % 24);
+        h ^= p[i];
+        h *= 1099511628211ULL;
     }
     return h;
 }
 
-#endif // RANDOMFS_HASH_H
+#endif
 
