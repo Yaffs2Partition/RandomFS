@@ -1,157 +1,100 @@
-#define FUSE_USE_VERSION 35
+#define FUSE_USE_VERSION 31
 
-#include <fuse3/fuse.h>
 #include <stdio.h>
-#include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
+#include <stdlib.h>
 #include <stdint.h>
-#include <errno.h>
-
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <fuse3/fuse.h>
+#include <time.h>
+#include "randomfs_engine.h"
 #include "hash.h"
 
-#define NODE_SIZE       512
-#define MAX_ENTRIES     8
-#define MAX_FILE_SIZE   (64 * 1024)
+static const char *g_img_path = NULL;
+static uint32_t g_seed = 0;
 
-/* entropy source */
-static int src_fd = -1;
-static off_t src_size = 0;
-
-/* read a deterministic node derived from path */
-static void rfs_read_node(const char *path, uint8_t *buf)
-{
-    uint64_t h = rfs_hash_path(path);
-    off_t off = h % (src_size - NODE_SIZE);
-
-    pread(src_fd, buf, NODE_SIZE, off);
+// ---------------------- Random helpers ----------------------
+void random_name(char *buf, size_t n) {
+    static const char chars[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    for (size_t i = 0; i < n - 1; i++) {
+        buf[i] = chars[rand() % (sizeof(chars) - 1)];
+    }
+    buf[n - 1] = '\0';
 }
 
-/* ===== filesystem operations ===== */
+// Generate a random number in [min, max]
+int rand_range(int min, int max) {
+    return min + rand() % (max - min + 1);
+}
 
-static int rfs_getattr(
-    const char *path,
-    struct stat *st,
-    struct fuse_file_info *fi)
-{
+// ---------------------- FUSE callbacks ----------------------
+static int rfs_getattr(const char *path, struct stat *stbuf,
+                       struct fuse_file_info *fi) {
     (void) fi;
-    memset(st, 0, sizeof(*st));
+    memset(stbuf, 0, sizeof(struct stat));
 
-    uint8_t node[NODE_SIZE];
-    rfs_read_node(path, node);
-
-    /* root is always a directory */
-    if (strcmp(path, "/") == 0 || (node[0] & 1)) {
-        st->st_mode  = S_IFDIR | 0555;
-        st->st_nlink = 2;
+    if (strcmp(path, "/") == 0) {
+        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_nlink = 2;
     } else {
-        st->st_mode  = S_IFREG | 0444;
-        st->st_nlink = 1;
-        st->st_size  = (node[1] % MAX_FILE_SIZE) + 1;
+        stbuf->st_mode = S_IFREG | 0644;
+        stbuf->st_nlink = 1;
+        stbuf->st_size = rand_range(512, 4096); // random file size
     }
-
     return 0;
 }
 
-static int rfs_readdir(
-    const char *path,
-    void *buf,
-    fuse_fill_dir_t filler,
-    off_t off,
-    struct fuse_file_info *fi,
-    enum fuse_readdir_flags flags)
-{
-    (void) off;
+static int rfs_readdir(const char *path, void *buf,
+                       fuse_fill_dir_t filler,
+                       off_t offset, struct fuse_file_info *fi,
+                       enum fuse_readdir_flags flags) {
+    (void) offset;
     (void) fi;
     (void) flags;
 
-    filler(buf, ".",  NULL, 0, 0);
+    filler(buf, ".", NULL, 0, 0);
     filler(buf, "..", NULL, 0, 0);
 
-    uint8_t node[NODE_SIZE];
-    rfs_read_node(path, node);
-
-    int count = node[2] % MAX_ENTRIES;
-
-    for (int i = 0; i < count; i++) {
-        char name[16];
-        snprintf(name, sizeof(name), "r%02x", node[3 + i]);
+    int num_files = rand_range(3, 7); // random number of files
+    char name[9]; // 8 chars + null
+    for (int i = 0; i < num_files; i++) {
+        random_name(name, sizeof(name));
         filler(buf, name, NULL, 0, 0);
     }
 
     return 0;
 }
 
-static int rfs_open(const char *path, struct fuse_file_info *fi)
-{
-    (void) path;
-
-    if ((fi->flags & O_ACCMODE) != O_RDONLY)
-        return -EACCES;
-
-    return 0;
-}
-
-static int rfs_read(
-    const char *path,
-    char *buf,
-    size_t size,
-    off_t offset,
-    struct fuse_file_info *fi)
-{
-    (void) fi;
-
-    uint64_t h = rfs_hash_path(path);
-    off_t base = h % (src_size - MAX_FILE_SIZE);
-
-    return pread(src_fd, buf, size, base + offset);
-}
-
-/* ===== fuse ops table ===== */
-
-static const struct fuse_operations rfs_ops = {
+// ---------------------- FUSE operations ----------------------
+static struct fuse_operations rfs_oper = {
     .getattr = rfs_getattr,
     .readdir = rfs_readdir,
-    .open    = rfs_open,
-    .read    = rfs_read,
 };
 
-/* ===== main ===== */
-
-int main(int argc, char *argv[])
-{
+// ---------------------- Main ----------------------
+int main(int argc, char **argv) {
     if (argc < 3) {
-        fprintf(stderr,
-            "usage: %s <entropy-source> <mountpoint>\n",
-            argv[0]);
+        fprintf(stderr, "Usage: %s <image-file> <mount-point> [seed]\n", argv[0]);
         return 1;
     }
 
-    src_fd = open(argv[1], O_RDONLY);
-    if (src_fd < 0) {
-        perror("open");
-        return 1;
+    g_img_path = argv[1];
+    const char *mount_point = argv[2];
+
+    if (argc >= 4) {
+        g_seed = (uint32_t)atoi(argv[3]);
     }
 
-    src_size = lseek(src_fd, 0, SEEK_END);
-    if (src_size < NODE_SIZE * 2) {
-        fprintf(stderr, "source too small\n");
-        return 1;
-    }
+    srand(g_seed); // seed randomness
 
-    char *fuse_argv[] = {
-        argv[0],
-        argv[2],
-        "-f",
-        "-o", "ro"
-    };
+    printf("RandomFS v0.2 starting with seed %u\n", g_seed);
 
-    return fuse_main(
-        5,
-        fuse_argv,
-        &rfs_ops,
-        NULL
-    );
+    // Pass only mount point to FUSE
+    char *fuse_argv[2];
+    fuse_argv[0] = argv[0];          // program name
+    fuse_argv[1] = (char *)mount_point;
+
+    return fuse_main(2, fuse_argv, &rfs_oper, NULL);
 }
 

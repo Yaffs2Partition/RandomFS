@@ -2,32 +2,16 @@
 #define RANDOMFS_HASH_H
 
 #include <stdint.h>
+#include <stddef.h>
 
-/*
- * RandomFS path hash
- * 64-bit FNV-1a
- *
- * Properties:
- * - deterministic
- * - fast
- * - stable across architectures
- * - good enough for filesystem paths
- */
-
-#define RFS_FNV_OFFSET 1469598103934665603ULL
-#define RFS_FNV_PRIME  1099511628211ULL
-
-static inline uint64_t rfs_hash_path(const char *path)
-{
-    uint64_t h = RFS_FNV_OFFSET;
-
-    while (*path) {
-        h ^= (uint8_t)*path++;
-        h *= RFS_FNV_PRIME;
+// Simple XOR hash for demo purposes
+static inline uint32_t rfs_hash(const uint8_t *data, size_t len) {
+    uint32_t h = 0;
+    for (size_t i = 0; i < len; i++) {
+        h ^= ((uint32_t)data[i]) << (i % 24);
     }
-
     return h;
 }
 
-#endif /* RANDOMFS_HASH_H */
+#endif // RANDOMFS_HASH_H
 
