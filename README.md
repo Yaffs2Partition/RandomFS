@@ -1,4 +1,4 @@
-# RandomFS Version 0.3
+# RandomFS Version 0.4
 ---
 ## New Features
 - Help page
