@@ -3,14 +3,18 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <unistd.h> // for off_t
+#include <sys/types.h>
 
-#define RFS_MAX_FILES 8
-#define RFS_FILE_SIZE 4096
-
-void rfs_engine_init(const char *img_path);
-int  rfs_engine_list(char names[RFS_MAX_FILES][9]);
-int  rfs_engine_read(const char *name, char *buf, size_t size, off_t offset);
+void   rfs_engine_init(const char *img_path, int chaos);
+int    rfs_engine_file_count(void);
+size_t rfs_engine_file_size(int index);
+void   rfs_engine_filename(int index, char *out);
+int    rfs_engine_read(
+          int index,
+          char *buf,
+          size_t size,
+          off_t offset
+       );
 
 #endif
 
